@@ -335,10 +335,13 @@ class DiscountRulesAPI:
 class ValidationCheck:
     """Результат проверки одного правила"""
     rule_name: str
+    quantity: float
+    price_without_discount: float
+    price_with_discount: float
     expected_discount: float
     actual_discount: float
     difference: float
-    status: str  # 'OK', 'FAIL'
+    status: str  # 'OK', 'FAIL', 'ERROR'
     error: str = None
 
 
@@ -407,6 +410,9 @@ class RulesValidator:
                 
                 check = ValidationCheck(
                     rule_name=rule_name,
+                    quantity=quantity,
+                    price_without_discount=price_without_discount,
+                    price_with_discount=price_with_discount,
                     expected_discount=expected_discount,
                     actual_discount=actual_discount,
                     difference=difference,
@@ -422,6 +428,9 @@ class RulesValidator:
             else:
                 check = ValidationCheck(
                     rule_name=rule_name,
+                    quantity=quantity,
+                    price_without_discount=price_without_discount,
+                    price_with_discount=price_with_discount,
                     expected_discount=expected_discount,
                     actual_discount=0,
                     difference=expected_discount,
@@ -454,21 +463,93 @@ class RulesValidator:
         for result in self.results:
             article = result['article']
             price = result['price']
+            status = result['status']
             
-            for check in result['checks']:
+            if status == 'NO_API_RULES':
                 rows.append({
                     'Артикул': article,
                     'Цена': price,
-                    'Правило': check.rule_name,
-                    'Ожидаемая скидка': check.expected_discount,
-                    'Фактическая скидка': check.actual_discount,
-                    'Расхождение': check.difference,
-                    'Статус': check.status,
-                    'Ошибка': check.error if check.error else ''
+                    'Статус': 'Нет правил в API',
+                    'Правило': '',
+                    'Количество': '',
+                    'Сумма без скидки': '',
+                    'Сумма со скидкой': '',
+                    'Ожидаемая скидка': '',
+                    'Фактическая скидка (API)': '',
+                    'Расхождение': '',
+                    'Результат': '',
+                    'Ошибка': ''
                 })
+            else:
+                for check in result['checks']:
+                    # Восстанавливаем детали из check
+                    quantity = check.quantity if hasattr(check, 'quantity') else ''
+                    price_without = check.price_without_discount if hasattr(check, 'price_without_discount') else ''
+                    price_with = check.price_with_discount if hasattr(check, 'price_with_discount') else ''
+                    
+                    rows.append({
+                        'Артикул': article,
+                        'Цена': price,
+                        'Статус': status,
+                        'Правило': check.rule_name,
+                        'Количество': quantity,
+                        'Сумма без скидки': price_without,
+                        'Сумма со скидкой': price_with,
+                        'Ожидаемая скидка': check.expected_discount,
+                        'Фактическая скидка (API)': check.actual_discount,
+                        'Расхождение': check.difference,
+                        'Результат': check.status,
+                        'Ошибка': check.error if check.error else ''
+                    })
         
         df = pd.DataFrame(rows)
-        df.to_excel(filename, index=False, engine='openpyxl')
+        
+        # Форматирование
+        with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Результаты')
+            
+            # Получаем worksheet для форматирования
+            worksheet = writer.sheets['Результаты']
+            
+            # Устанавливаем ширину колонок
+            worksheet.column_dimensions['A'].width = 15  # Артикул
+            worksheet.column_dimensions['B'].width = 10  # Цена
+            worksheet.column_dimensions['C'].width = 20  # Статус
+            worksheet.column_dimensions['D'].width = 15  # Правило
+            worksheet.column_dimensions['E'].width = 12  # Количество
+            worksheet.column_dimensions['F'].width = 18  # Сумма без скидки
+            worksheet.column_dimensions['G'].width = 18  # Сумма со скидкой
+            worksheet.column_dimensions['H'].width = 18  # Ожидаемая скидка
+            worksheet.column_dimensions['I'].width = 22  # Фактическая скидка
+            worksheet.column_dimensions['J'].width = 15  # Расхождение
+            worksheet.column_dimensions['K'].width = 12  # Результат
+            worksheet.column_dimensions['L'].width = 30  # Ошибка
+            
+            # Форматируем заголовки
+            from openpyxl.styles import Font, PatternFill, Alignment
+            
+            header_fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
+            header_font = Font(bold=True, color='FFFFFF')
+            
+            for cell in worksheet[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+            
+            # Форматируем результаты (цветами)
+            for row in range(2, len(df) + 2):
+                result_cell = worksheet.cell(row=row, column=11)  # Колонка K (Результат)
+                
+                if result_cell.value == 'OK':
+                    result_cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                    result_cell.font = Font(color='006100')
+                elif result_cell.value == 'FAIL':
+                    result_cell.fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                    result_cell.font = Font(color='9C0006')
+                elif result_cell.value == 'ERROR':
+                    result_cell.fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+                    result_cell.font = Font(color='9C6500')
+        
         logger.info(f"\n💾 Результаты сохранены в {filename}")
         return filename
 
