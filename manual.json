@@ -1,0 +1,54 @@
+{
+  "id": null,
+  "name": "Ахтирка_99999",
+  "beginDate": "2025-10-12T21:00:00.000Z",
+  "endDate": "2027-10-15T09:52:00.000Z",
+  "status": 1,
+  "operatorId": 16,
+  "priority": 50,
+  "schedulingMode": 0,
+  "extCode": null,
+  "onlyMessageMode": 0,
+  "isolationLevel": 1,
+  "applyMode": 2,
+  "posMessage": "",
+  "operatorMessage": "",
+  "ruleConditions": [
+    {
+      "comparsionType": 8,
+      "type": 1,
+      "group": "0",
+      "value": "{\"ids\":[1117],\"descs\":[\"БЦ №100\"]}"
+    }
+  ],
+  "orderConditions": [],
+  "resultScaleItems": [
+    {
+      "comparsionType": 0,
+      "type": 9,
+      "results": [
+        {
+          "fixedValue": "3",
+          "discountTimeType": 0,
+          "discountValueType": 2,
+          "restriction": {
+            "conditions": [
+              {
+                "type": 6,
+                "value": "2"
+              }
+            ],
+            "exceptSkuSetId": null,
+            "exceptSkuSetIdDesc": "",
+            "skuSetId": 10175,
+            "skuSetIdDesc": "Ахтирка_99999",
+            "groupApplyMode": 1,
+            "sortItemsMode": 1
+          },
+          "valueType": 0
+        }
+      ],
+      "value": "{\"value\":}"
+    }
+  ]
+}
