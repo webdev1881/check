@@ -5,7 +5,7 @@
   "endDate": "2027-10-15T09:52:00.000Z",
   "status": 1,
   "operatorId": 16,
-  "priority": 50,
+  "priority": 55,
   "schedulingMode": 0,
   "extCode": null,
   "onlyMessageMode": 0,
@@ -36,6 +36,10 @@
               {
                 "type": 6,
                 "value": "2"
+              },
+              {
+                "type": 1,
+                "value": "20"
               }
             ],
             "exceptSkuSetId": null,
