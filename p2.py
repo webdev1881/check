@@ -237,7 +237,7 @@ class DiscountRulesAPI:
         return all_rules
     
     async def find_rules_by_articles(self, articles: List[str]) -> Dict[str, List[Dict]]:
-        """Находит правила для списка артикулов"""
+        """Находит правила для списка артикулов (два правила на артикул с приоритетами 55 и 50)"""
         all_rules = await self.get_all_discount_rules()
         
         # Группируем правила по артикулам
@@ -246,17 +246,29 @@ class DiscountRulesAPI:
         for rule in all_rules:
             name = rule.get('name', '')
             
-            # Проверяем структуру "Ахтирка_{Article}"
+            # Проверяем структуру "Ахтирка_{Article}" (игнорируем суффиксы типа "_ц3")
             if name.startswith('Ахтирка_'):
-                article = name.split('Ахтирка_', 1)[1]
+                # Убираем префикс "Ахтирка_"
+                name_without_prefix = name.split('Ахтирка_', 1)[1]
+                
+                # Берем только первое подчеркивание (игнорируем суффиксы)
+                article = name_without_prefix.split('_')[0]
                 
                 if article in rules_by_article:
                     rules_by_article[article].append(rule)
         
-        # Логируем результаты
+        # Логируем результаты и проверяем наличие правил с приоритетами 55 и 50
         for article, rules in rules_by_article.items():
             if rules:
-                logger.info(f"Для артикула {article} найдено {len(rules)} правил")
+                priorities = [r.get('priority') for r in rules]
+                logger.info(f"Для артикула {article} найдено {len(rules)} правил с приоритетами: {priorities}")
+                
+                # Проверяем наличие обоих приоритетов
+                has_55 = any(p == 55 for p in priorities)
+                has_50 = any(p == 50 for p in priorities)
+                
+                if not (has_55 and has_50):
+                    logger.warning(f"⚠️ Артикул {article}: отсутствует правило с приоритетом {'55' if not has_55 else '50'}")
             else:
                 logger.warning(f"Для артикула {article} не найдено правил")
         
@@ -273,21 +285,21 @@ class DiscountRulesAPI:
                         "id": article
                     },
                     "quantity": quantity,
-                    "price": str(price),
+                    "price": str(price), 
                     "discount": 0,
                     "coupons": [],
-                    "paidByPoints": None,
-                    "appliedDiscountAmount": None,
+                    "paidByPoints": 0,
+                    "appliedDiscountAmount": 0,
                     "isFullTank": False,
                     "amount": round(quantity * price, 2)
                 }
             ],
             "promoCodes": "",
-            "cardCode": "",
-            "clientId": "",
+            "cardCode": None,
+            "clientId": None,
             "payFormType": 0,
             "terminalId": terminal_id,
-            "date": "2025-11-01T16:46:39.609Z"
+            "date": "2025-11-04T18:32:03.496Z"
         }
         
         headers = {
@@ -298,17 +310,77 @@ class DiscountRulesAPI:
             'user-agent': self.config.USER_AGENT
         }
         
+        logger.info(f"\n📤 Запрос к discountRuleTester/process:")
+        logger.info(f"   Article: {article}, Quantity: {quantity}, Price: {price}, TerminalId: {terminal_id}")
+        logger.info(f"   Payload: {payload}")
+        
         try:
             async with self.session.post(url, json=payload, headers=headers, cookies=self.cookies) as response:
+                logger.info(f"\n📥 Ответ от API:")
+                logger.info(f"   HTTP Status: {response.status}")
+                
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                        # logger.info(f"   Response JSON: {data}")
+                        
+                        # ВАЖНО: Проверяем наличие ошибки в ответе
+                        if data and isinstance(data, dict):
+                            # Если есть поле error и оно не пустое - это ошибка
+                            error_msg = data.get('error')
+                            if error_msg and error_msg != '':
+                                logger.error(f"   ❌ API вернул ошибку: {error_msg}")
+                                return {
+                                    'success': False,
+                                    'error': error_msg,
+                                    'total_discount': 0
+                                }
+                            
+                            # Если data = None - это тоже ошибка
+                            data_obj = data.get('data')
+                            if data_obj is None:
+                                logger.warning(f"   ⚠️  API вернул data=None (error: {error_msg})")
+                                return {
+                                    'success': False,
+                                    'error': error_msg if error_msg else 'API вернул data=None',
+                                    'total_discount': 0
+                                }
+                        
+                    except Exception as json_error:
+                        logger.error(f"   ❌ Ошибка парсинга JSON: {json_error}")
+                        text = await response.text()
+                        logger.error(f"   Текст ответа: {text}")
+                        return {
+                            'success': False,
+                            'error': f'JSON parse error: {str(json_error)[:200]}',
+                            'total_discount': 0
+                        }
+                    
+                    # Безопасное извлечение totalDiscountAmount
+                    total_discount = 0
+                    if isinstance(data, dict):
+                        data_obj = data.get('data')
+                        if isinstance(data_obj, dict):
+                            total_discount = data_obj.get('totalDiscountAmount', 0)
+                            logger.info(f"   ✅ Успешно: totalDiscountAmount = {total_discount}")
+                    
+                    # Преобразуем в float если нужно
+                    try:
+                        total_discount = float(total_discount) if total_discount else 0
+                    except (ValueError, TypeError) as e:
+                        logger.error(f"   ❌ Ошибка преобразования в float: {e}")
+                        total_discount = 0
+                    
                     return {
                         'success': True,
                         'data': data,
-                        'total_discount': data.get('data', {}).get('totalDiscountAmount', 0)
+                        'total_discount': total_discount
                     }
                 else:
                     text = await response.text()
+                    logger.error(f"   ❌ HTTP ошибка {response.status}")
+                    logger.error(f"   Текст ответа: {text}")
+                    
                     # Проверяем на ошибку БД - артикул не найден
                     if 'is not present in table' in text or 'ext_sku_group_id' in text:
                         return {
@@ -316,17 +388,16 @@ class DiscountRulesAPI:
                             'error': 'Артикул не найден в системе',
                             'total_discount': 0
                         }
-                    logger.error(f"Ошибка тестирования правила: {response.status} - {text}")
                     return {
                         'success': False,
                         'error': text[:200],  # Ограничиваем длину
                         'total_discount': 0
                     }
         except Exception as e:
-            logger.error(f"Ошибка при тестировании правила: {e}")
+            logger.error(f"   ❌ Исключение: {type(e).__name__}: {e}")
             return {
                 'success': False,
-                'error': str(e)[:200],
+                'error': f'{type(e).__name__}: {str(e)[:200]}',
                 'total_discount': 0
             }
 
@@ -369,6 +440,7 @@ class RulesValidator:
         
         logger.info(f"\n{'='*80}")
         logger.info(f"🔍 Проверка артикула: {rule_set.article}")
+        logger.info(f"Найдено правил в API: {len(api_rules)}")
         logger.info(f"{'='*80}")
         
         # Проверяем каждое из 5 правил
@@ -388,10 +460,22 @@ class RulesValidator:
             expected_discount = round(price_without_discount - price_with_discount, 2)
             
             logger.info(f"\n📋 {rule_name}:")
-            logger.info(f"   Количество: {quantity}")
+            logger.info(f"   Количество ОТ: {quantity}")
             logger.info(f"   Цена без скидки: {price_without_discount}")
-            logger.info(f"   Цена со скидкой: {price_with_discount}")
+            logger.info(f"   Ожидаемая цена со скидкой: {price_with_discount}")
             logger.info(f"   Ожидаемая скидка: {expected_discount}")
+            
+            # Ищем пару правил в API (приоритет 55 и 50)
+            found_rules = self._find_matching_rules(api_rules, quantity, rule_set.price)
+            
+            if found_rules:
+                logger.info(f"   📌 Найдены правила в API:")
+                for fr in found_rules:
+                    priority = fr.get('priority', 'N/A')
+                    name = fr.get('name', 'N/A')
+                    logger.info(f"      • Priority {priority}: {name}")
+            else:
+                logger.warning(f"   ⚠️  Правила с приоритетом 55/50 не найдены")
             
             # Тестируем через API
             result = await self.api.test_discount_rule(
@@ -403,10 +487,14 @@ class RulesValidator:
             
             if result['success']:
                 actual_discount = result['total_discount']
+                actual_price_with_discount = round(price_without_discount - actual_discount, 2)
                 difference = abs(expected_discount - actual_discount)
                 
                 # Определяем статус (допуск 0.01)
-                status = 'OK' if difference <= 0.01 else 'FAIL'
+                if not found_rules:
+                    status = 'NOT_FOUND'
+                else:
+                    status = 'OK' if difference <= 0.01 else 'FAIL'
                 
                 check = ValidationCheck(
                     rule_name=rule_name,
@@ -421,9 +509,11 @@ class RulesValidator:
                 
                 # Красивый вывод
                 if status == 'OK':
-                    logger.info(f"   ✅ API скидка: {actual_discount} - СОВПАДАЕТ")
+                    logger.info(f"   ✅ API скидка: {actual_discount} (цена: {actual_price_with_discount}) - СОВПАДАЕТ")
+                elif status == 'NOT_FOUND':
+                    logger.warning(f"   ⚠️  API скидка: {actual_discount} (цена: {actual_price_with_discount}) - ПРАВИЛА НЕ НАЙДЕНЫ")
                 else:
-                    logger.warning(f"   ❌ API скидка: {actual_discount} - РАСХОЖДЕНИЕ {difference}")
+                    logger.warning(f"   ❌ API скидка: {actual_discount} (цена: {actual_price_with_discount}) - РАСХОЖДЕНИЕ {difference}")
                 
             else:
                 check = ValidationCheck(
@@ -445,16 +535,104 @@ class RulesValidator:
         ok_count = sum(1 for c in validation_result['checks'] if c.status == 'OK')
         fail_count = sum(1 for c in validation_result['checks'] if c.status == 'FAIL')
         error_count = sum(1 for c in validation_result['checks'] if c.status == 'ERROR')
+        not_found_count = sum(1 for c in validation_result['checks'] if c.status == 'NOT_FOUND')
         
         validation_result['status'] = 'COMPLETED'
         validation_result['ok_count'] = ok_count
         validation_result['fail_count'] = fail_count
         validation_result['error_count'] = error_count
-        validation_result['message'] = f'Проверено 5 правил: ✅ {ok_count} | ❌ {fail_count} | ⚠️ {error_count}'
+        validation_result['not_found_count'] = not_found_count
+        validation_result['message'] = f'Проверено 5 правил: ✅ {ok_count} | ❌ {fail_count} | ⚠️ {error_count} | 🔍 {not_found_count}'
         
         logger.info(f"\n📊 Итог: {validation_result['message']}")
         
         return validation_result
+    
+    def _find_matching_rules(self, api_rules: List[Dict], quantity_from: float, price: float) -> List[Dict]:
+        """Находит правила с приоритетом 55 (с ДО) и 50 (без ДО) для заданного количества"""
+        matching_rules = []
+        
+        if not api_rules:
+            return matching_rules
+        
+        for rule in api_rules:
+            if not rule or not isinstance(rule, dict):
+                continue
+                
+            priority = rule.get('priority', 0)
+            
+            # Проверяем только правила с приоритетом 55 или 50
+            if priority not in [55, 50]:
+                continue
+            
+            # Ищем в resultScaleItems
+            result_scale_items = rule.get('resultScaleItems', [])
+            if not result_scale_items:
+                continue
+                
+            for scale_item in result_scale_items:
+                if not scale_item or not isinstance(scale_item, dict):
+                    continue
+                    
+                results = scale_item.get('results', [])
+                if not results:
+                    continue
+                    
+                for result_item in results:
+                    if not result_item or not isinstance(result_item, dict):
+                        continue
+                        
+                    restriction = result_item.get('restriction')
+                    if not restriction or not isinstance(restriction, dict):
+                        continue
+                        
+                    conditions = restriction.get('conditions', [])
+                    if not conditions:
+                        continue
+                    
+                    # Ищем условия типа 6 (не менше) и 1 (не більше)
+                    has_from = False
+                    has_to = False
+                    from_value = None
+                    to_value = None
+                    
+                    for condition in conditions:
+                        if not condition or not isinstance(condition, dict):
+                            continue
+                            
+                        cond_type = condition.get('type')
+                        cond_value_str = condition.get('value')
+                        
+                        if cond_value_str is None:
+                            continue
+                            
+                        try:
+                            cond_value = float(cond_value_str)
+                        except (ValueError, TypeError):
+                            continue
+                        
+                        if cond_type == 6:  # не менше (ОТ)
+                            has_from = True
+                            from_value = cond_value
+                        elif cond_type == 1:  # не більше (ДО)
+                            has_to = True
+                            to_value = cond_value
+                    
+                    # Приоритет 55 должен иметь оба условия (ОТ-ДО)
+                    if priority == 55 and has_from and has_to:
+                        if from_value is not None and to_value is not None:
+                            if from_value <= quantity_from <= to_value:
+                                matching_rules.append(rule)
+                                break
+                    
+                    # Приоритет 50 должен иметь только условие ОТ
+                    elif priority == 50 and has_from and not has_to:
+                        if from_value is not None:
+                            if from_value <= quantity_from:
+                                matching_rules.append(rule)
+                                break
+        
+        return matching_rules
     
     def export_to_excel(self, filename: str = "validation_results.xlsx"):
         """Экспортирует результаты в Excel"""
@@ -620,7 +798,7 @@ async def main():
         print("✅ Авторизация успешна")
         
         # Получаем правила
-        print(f"\n🔍 Поиск правил для {len(articles)} артикулов...")
+        # print(f"\n🔍 Поиск правил для {len(articles)} артикулов...")
         rules_by_article = await api.find_rules_by_articles(articles)
         
         # Валидация
@@ -632,7 +810,7 @@ async def main():
         
         total_articles = len(rule_sets)
         for idx, rule_set in enumerate(rule_sets, 1):
-            print(f"\n[{idx}/{total_articles}] Проверка артикула {rule_set.article}...")
+            # print(f"\n[{idx}/{total_articles}] Проверка артикула {rule_set.article}...")
             
             api_rules = rules_by_article.get(rule_set.article, [])
             result = await validator.validate(rule_set, api_rules)
@@ -697,7 +875,3 @@ if __name__ == "__main__":
         logger.info("\nПрограмма прервана пользователем")
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}", exc_info=True)
-        
-        
-# source .venv/Scripts/activate
-# python discount_checker.py
